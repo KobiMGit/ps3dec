@@ -1,35 +1,42 @@
 [package]
-name = "PS3DECREMAKE_CLI"
-version = "0.2.0"
-edition = "2021"
-authors = ["Y.sellami"]
+name = "ps3decrs"
+version = "2.0.0"
+edition = "2024"
+description = "PS3 ISO decryption tool."
+repository = "https://github.com/Redrrx/ps3dec"
+readme = "README.md"
+license = "MIT"
+keywords = ["ps3", "iso", "decryption", "bluray"]
+categories = ["command-line-utilities", "cryptography"]
+
 
 [dependencies]
 clap = { version = "4.5.2", features = ["derive"] }
 aes = "0.8.4"
 hex = "0.4.3"
-indicatif = "0.17.8"
+indicatif = "0.18.0"
 rayon = "1.9.0"
 cbc = { version = "0.1.2", features = ["alloc"] }
-generic-array = "1.0.0"
-block-modes = "0.9.1"
+generic-array = "1.2.0"
 log = "0.4"
 log4rs = "1.0"
 chrono = "0.4"
-console = "0.15.8"
-config = "0.14.0"
+num_cpus = "1.17.0"
 
 [profile.release]
 opt-level = 3
-strip = "debuginfo"
+strip = true
 lto = "fat"
-codegen-units = 1
+
+[build]
+rustflags = ["-C", "target-cpu=native"]
 
 [lib]
-name = "ps3decremake"
+name = "ps3dec"
 path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "ps3decremake_cli"
+name = "ps3decrs"
 path = "src/main.rs"
+

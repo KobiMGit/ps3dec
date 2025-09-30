@@ -1,88 +1,149 @@
 pub mod autodetect;
 pub mod utils;
-
-use aes::cipher::{consts::U16, generic_array::GenericArray, KeyIvInit};
+pub mod args;
 use aes::Aes128Dec;
-use cbc::Decryptor;
+use aes::cipher::{KeyInit, BlockDecryptMut};
+use aes::cipher::generic_array::{GenericArray, typenum::U16};
 use hex::decode;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::info;
 use rayon::prelude::*;
-use std::fs::{File, OpenOptions};
-use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
-use std::sync::{Arc, Mutex};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufReader};
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
-use utils::{decrypt_sector, extract_regions, generate_iv, is_encrypted};
-
+use utils::{ extract_regions, generate_iv, is_encrypted};
 const SECTOR_SIZE: usize = 2048;
-const CHUNK_SIZE: usize = 8 * 1024 * 1024;
 
-type Aes128CbcDec = Decryptor<Aes128Dec>;
+use crate::args::DEFAULT_CHUNK;
 
 
-trait WriteAllAt: Write + Seek {
-    fn write_all_at(&mut self, buf: &[u8], offset: u64) -> io::Result<()> {
-        self.seek(SeekFrom::Start(offset))?;
-        self.write_all(buf)
-    }
-}
-
-impl WriteAllAt for File {}
-
-pub fn decrypt(file_path: String, decryption_key: &str, thread_count: usize) -> io::Result<()> {
+pub fn decrypt(
+    file_path: String,
+    decryption_key: &str,
+    thread_count: usize,
+    output_dir: Option<String>,
+    output_name: Option<String>,
+    chunk_size: Option<usize>,
+) -> io::Result<()> {
     info!("Starting decryption process.");
     let start_time = Instant::now();
 
-    rayon::ThreadPoolBuilder::new().num_threads(thread_count).build_global().unwrap();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(thread_count.max(1))
+        .build_global()
+        .unwrap_or_else(|e| info!("Failed to set thread count, using default: {}", e));
 
-    let key_bytes = decode(decryption_key).map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-    let key: GenericArray<u8, U16> = GenericArray::clone_from_slice(&key_bytes);
+    let key_bytes = decode(decryption_key.trim())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    if key_bytes.len() != 16 {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "decryption key must be 16 bytes (32 hex chars)",
+        ));
+    }
+    let key_ga: GenericArray<u8, U16> = GenericArray::clone_from_slice(&key_bytes);
 
     let input_file = File::open(&file_path)?;
     let total_size = input_file.metadata()?.len();
-    let total_sectors = total_size / SECTOR_SIZE as u64;
+    if total_size % SECTOR_SIZE as u64 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "input size is not a multiple of SECTOR_SIZE",
+        ));
+    }
+    let total_sectors = (total_size / SECTOR_SIZE as u64) as usize;
 
-    info!("File size: {:.2} MB, Total sectors: {}", total_size as f64 / 1_048_576.0, total_sectors);
+    info!(
+        "File size: {:.2} MB, Total sectors: {}",
+        total_size as f64 / 1_048_576.0,
+        total_sectors
+    );
 
-    let reader = Arc::new(Mutex::new(BufReader::with_capacity(CHUNK_SIZE, input_file)));
-    let output_file_path = format!("{}_decrypted.iso", file_path);
-    let output_file = Arc::new(Mutex::new(OpenOptions::new().write(true).create(true).open(&output_file_path)?));
-
-    let regions = Arc::new(extract_regions(&mut reader.lock().unwrap())?);
+    let mut region_reader = BufReader::with_capacity(256 * 1024, File::open(&file_path)?);
+    let regions = Arc::new(extract_regions(&mut region_reader)?);
     info!("Total regions detected: {}", regions.len());
 
-    let progress_bar = Arc::new(ProgressBar::new(total_sectors));
-    progress_bar.set_style(ProgressStyle::default_bar()
-        .template("Estimated time left: {eta} [{bar:40.cyan/blue}] {pos:>7}/{len:7} sectors ({percent}%)")
-        .unwrap()
-        .progress_chars("=>-"));
+    let in_file = Arc::new(input_file);
+    let output_file_path = if let Some(dir) = output_dir {
+        let path = Path::new(&file_path);
+        let file_name = if let Some(name) = output_name {
+            format!("{name}.iso")
+        } else {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("decrypted");
+            format!("{stem}_decrypted.iso")
+        };
+        let output_dir_path = Path::new(&dir);
+        if !output_dir_path.exists() {
+            fs::create_dir_all(output_dir_path)?;
+        }
+        output_dir_path.join(file_name).to_string_lossy().to_string()
+    } else if let Some(name) = output_name {
+        format!("{name}.iso")
+    } else {
+        format!("{file_path}_decrypted.iso")
+    };
+    info!("Output will be written to: {}", output_file_path);
 
-    let chunk_size = CHUNK_SIZE / SECTOR_SIZE;
-    let sectors: Vec<u64> = (0..total_sectors).collect();
-    let chunks = sectors.chunks(chunk_size);
+    let out_file = OpenOptions::new().write(true).create(true).open(&output_file_path)?;
+    out_file.set_len(total_size)?;
+    let out_file = Arc::new(out_file);
 
-    chunks.par_bridge().for_each(|chunk| {
-        let start_sector = *chunk.first().unwrap() as usize;
-        let end_sector = (*chunk.last().unwrap() as usize + 1).min(total_sectors as usize);
-        let mut chunk_data = vec![0u8; SECTOR_SIZE * (end_sector - start_sector)];
+    let progress_bar = Arc::new(ProgressBar::new(total_sectors as u64));
+    progress_bar.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.208} {elapsed_precise} |{bar:40.208/236}| {bytes:>8}/{total_bytes:8} ({bytes_per_sec}) ETA {eta_precise}")
+            .unwrap()
+            .progress_chars("█▓▒░"),
+    );
+    let chunk_bytes = chunk_size
+        .map(|mib| mib.saturating_mul(1024 * 1024))
+        .unwrap_or(DEFAULT_CHUNK.unwrap());
+    let chunk_sectors = (chunk_bytes / SECTOR_SIZE).max(1);
+    let tasks: Vec<(usize, usize)> = (0..total_sectors)
+        .step_by(chunk_sectors)
+        .map(|s| (s, (s + chunk_sectors).min(total_sectors)))
+        .collect();
 
-        {
-            let mut reader = reader.lock().unwrap();
-            reader.seek(SeekFrom::Start(start_sector as u64 * SECTOR_SIZE as u64)).unwrap();
-            reader.read_exact(&mut chunk_data).unwrap();
+    tasks.into_par_iter().for_each(|(start_sector, end_sector)| {
+        let mut buf = vec![0u8; SECTOR_SIZE * (end_sector - start_sector)];
+        if let Err(e) = utils::read_exact_at(
+            &in_file,
+            &mut buf,
+            (start_sector as u64) * (SECTOR_SIZE as u64),
+        ) {
+            eprintln!("Error reading data: {}", e);
+            return;
         }
 
-        chunk_data.par_chunks_mut(SECTOR_SIZE).enumerate().for_each(|(offset, sector_data)| {
-            let sector_index = start_sector + offset;
-            if is_encrypted(&regions, sector_index as u64, sector_data) {
-                let iv = generate_iv(sector_index as u64);
-                let mut cipher = Aes128CbcDec::new(&key, &iv);
-                decrypt_sector(&mut cipher, sector_data).unwrap();
+        let mut aes_core = Aes128Dec::new(&key_ga);
+        for (i, sector) in buf.chunks_mut(SECTOR_SIZE).enumerate() {
+            let sector_index = start_sector + i;
+            if !is_encrypted(&regions, sector_index as u64, sector) {
+                continue;
             }
-        });
 
-        let offset = start_sector as u64 * SECTOR_SIZE as u64;
-        output_file.lock().unwrap().write_all_at(&chunk_data, offset).unwrap();
+            let iv_ga = generate_iv(sector_index as u64);
+            let mut prev = [0u8; 16];
+            prev.copy_from_slice(iv_ga.as_slice());
+
+            for block in sector.chunks_exact_mut(16) {
+                let mut cur = [0u8; 16];
+                cur.copy_from_slice(block);
+
+                aes_core.decrypt_block_mut(GenericArray::from_mut_slice(block));
+                for k in 0..16 {
+                    block[k] ^= prev[k];
+                }
+                prev = cur;
+            }
+        }
+
+        let off = (start_sector as u64) * (SECTOR_SIZE as u64);
+        if let Err(e) = utils::write_all_at(&out_file, &buf, off) {
+            eprintln!("Error writing data at offset {}: {}", off, e);
+        }
 
         progress_bar.inc((end_sector - start_sector) as u64);
     });
