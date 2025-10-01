@@ -36,10 +36,9 @@ pub fn decrypt(
         .unwrap_or_else(|e| info!("Failed to set thread count, using default: {}", e));
 
     let key_bytes = decode(decryption_key.trim())
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
     if key_bytes.len() != 16 {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             "decryption key must be 16 bytes (32 hex chars)",
         ));
     }
@@ -48,8 +47,7 @@ pub fn decrypt(
     let input_file = File::open(&file_path)?;
     let total_size = input_file.metadata()?.len();
     if total_size % SECTOR_SIZE as u64 != 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             "input size is not a multiple of SECTOR_SIZE",
         ));
     }
@@ -86,7 +84,7 @@ pub fn decrypt(
     };
     info!("Output will be written to: {}", output_file_path);
 
-    let out_file = OpenOptions::new().write(true).create(true).open(&output_file_path)?;
+    let out_file = OpenOptions::create(OpenOptions::new().write(true), true).open(&output_file_path)?;
     out_file.set_len(total_size)?;
     let out_file = Arc::new(out_file);
 

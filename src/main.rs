@@ -12,7 +12,7 @@ pub mod utils;
 
 pub use utils::{
     read_exact_at, write_all_at, extract_regions, generate_iv, is_encrypted,
-    decrypt_sector, setup_logging,
+     setup_logging,
 };
 use crate::args::{Ps3decargs, DEFAULT_CHUNK};
 use crate::autodetect::detect_key;
@@ -20,18 +20,13 @@ use crate::utils::key_validation;
 
 // Either drag and drop which will auto-detect key, OR launch through CLI.
 fn main() -> io::Result<()> {
-
     let args: Vec<String> = env::args().collect();
-
     if args.len() == 2 && args[1] == "--help" {
-        let _ = Ps3decargs::parse_from(&["", "--help"]);
+        let _ = Ps3decargs::parse_from(["", "--help"]);
         return Ok(());
     }
-
-    utils::setup_logging().expect("Failed to setup logging");
-
-    let mut skip_wait = false;
-
+    setup_logging().expect("Failed to setup logging");
+    let ps3_args = Ps3decargs::parse();
     if args.len() == 2 {
         // drag & drop / single-arg path
         let raw = &args[1];
@@ -115,13 +110,12 @@ fn main() -> io::Result<()> {
             error!("Error: Decryption key is required unless '--auto' is specified.");
         }
 
-        skip_wait = ps3_args.skip;
     } else {
         error!("Please provide an ISO file path. Use --help for more information.");
         exit(0)
     }
 
-    if !skip_wait {
+    if !ps3_args.skip {
         info!("Job done, press any button to exit...");
         let mut input_string = String::new();
         io::stdin().read_line(&mut input_string).expect("Failed to read line");

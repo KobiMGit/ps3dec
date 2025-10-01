@@ -1,8 +1,5 @@
 use aes::cipher::consts::U16;
 use aes::cipher::generic_array::GenericArray;
-use aes::cipher::BlockDecryptMut;
-use aes::Aes128Dec;
-use cbc::Decryptor;
 use chrono::Local;
 use log::{info, warn, LevelFilter};
 #[cfg(windows)]
@@ -81,7 +78,7 @@ pub fn key_validation(key: &str) -> bool {
         return false;
     }
 
-    if !stripped_key.chars().all(|c| c.is_digit(16)) {
+    if !stripped_key.chars().all(|c| c.is_ascii_hexdigit()) {
         println!("Key contains invalid characters");
         warn!("Key contains invalid characters");
         return false;
@@ -92,15 +89,16 @@ pub fn key_validation(key: &str) -> bool {
 }
 
 // Making an init vector
+#[inline(always)]
 pub fn generate_iv(sector: u64) -> GenericArray<u8, U16> {
     let mut iv_bytes = [0u8; 16];
-    iv_bytes[12] = ((sector & 0xFF000000) >> 24) as u8;
-    iv_bytes[13] = ((sector & 0x00FF0000) >> 16) as u8;
-    iv_bytes[14] = ((sector & 0x0000FF00) >> 8) as u8;
-    iv_bytes[15] = (sector & 0x000000FF >> 0) as u8;
+    iv_bytes[12] = (sector >> 24) as u8;
+    iv_bytes[13] = (sector >> 16) as u8;
+    iv_bytes[14] = (sector >> 8) as u8;
+    iv_bytes[15] = sector as u8;
     GenericArray::clone_from_slice(&iv_bytes)
 }
-
+#[inline(always)]
 pub fn is_encrypted(regions: &[Region], sector: u64, sector_data: &[u8]) -> bool {
     if sector_data.iter().all(|&b| b == 0) {
         return false;
@@ -108,12 +106,7 @@ pub fn is_encrypted(regions: &[Region], sector: u64, sector_data: &[u8]) -> bool
     regions.iter().any(|r| sector >= r.start && sector < r.end)
 }
 
-pub fn decrypt_sector(cipher: &mut Decryptor<Aes128Dec>, sector_data: &mut [u8]) -> io::Result<()> {
-    for chunk in sector_data.chunks_exact_mut(16) {
-        cipher.decrypt_block_mut(GenericArray::from_mut_slice(chunk));
-    }
-    Ok(())
-}
+
 
 // Splitting the cake
 pub fn extract_regions<R: Read + Seek>(reader: &mut R) -> io::Result<Vec<Region>> {
@@ -156,11 +149,11 @@ pub fn setup_logging() -> Result<(), Box<dyn std::error::Error>> {
     let fmt = "{d(%Y-%m-%d %H:%M:%S)} [{l}] - {m}\n";
 
     let stdout = ConsoleAppender::builder()
-        .encoder(Box::new(PatternEncoder::new(&fmt)))
+        .encoder(Box::new(PatternEncoder::new(fmt)))
         .build();
 
     let logfile = FileAppender::builder()
-        .encoder(Box::new(PatternEncoder::new(&fmt)))
+        .encoder(Box::new(PatternEncoder::new(fmt)))
         .build(log_file_name)?;
 
     let config = Config::builder()
