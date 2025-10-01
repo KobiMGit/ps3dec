@@ -8,6 +8,8 @@ readme = "README.md"
 license = "MIT"
 keywords = ["ps3", "iso", "decryption", "bluray"]
 categories = ["command-line-utilities", "cryptography"]
+rust-version = "1.85"
+include = ["src/**", "Cargo.toml", "README*", "LICENSE*"]
 
 
 [dependencies]
@@ -16,7 +18,6 @@ aes = "0.8.4"
 hex = "0.4.3"
 indicatif = "0.18.0"
 rayon = "1.9.0"
-cbc = { version = "0.1.2", features = ["alloc"] }
 generic-array = "1.2.0"
 log = "0.4"
 log4rs = "1.0"
