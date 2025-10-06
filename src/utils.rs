@@ -2,7 +2,6 @@ use aes::cipher::consts::U16;
 use aes::cipher::generic_array::GenericArray;
 use chrono::Local;
 use log::{info, warn, LevelFilter};
-#[cfg(windows)]
 use std::fs::File;
 use std::{fs, io};
 use std::io::{ Read, Seek, SeekFrom};
