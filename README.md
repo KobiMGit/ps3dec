@@ -47,8 +47,8 @@ https://github.com/user-attachments/assets/978c1827-d788-449a-a52f-6743e94cb4db
 | `--tc`          | Thread count, specifies the number of threads                     | Be careful with this one                                  |
 | `--auto`        | Enables automatic key detection and decryption                    | Will only work if there is the key in the **keys** folder |
 | `--skip`        | Disables the press any key to exit after decryption               |                                                           |    
-| `--output_dir`  | output directory destination for the decrypted iso                |                                                           |
-| `--output_name` | output file name for the decrypted iso                            |                                                           |
+| `--output-dir`  | output directory destination for the decrypted iso                |                                                           |
+| `--output-name` | output file name for the decrypted iso                            |                                                           |
 | `--chunk-size`  | how big the chunk of the iso is processed at the same time in MIB | Read down below about chunk size section.                 |
 
 
